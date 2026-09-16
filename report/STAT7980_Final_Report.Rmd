@@ -1,0 +1,152 @@
+---
+title: "Statistical Analysis of Healthcare Expenditures Using MEPS: Calibrated Uncertainty for Individual-Level Cost Prediction"
+author: "STAT 7980 Project"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  word_document:
+    toc: true
+    number_sections: true
+  html_document:
+    toc: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE, fig.width=8, fig.height=5)
+library(tidyverse)
+library(knitr)
+read_if <- function(path) if (file.exists(path)) readr::read_csv(path,show_col_types=FALSE) else tibble()
+perf <- read_if("results/tables/model_performance.csv")
+ints <- read_if("results/tables/interval_performance.csv")
+desc <- read_if("results/tables/descriptive_summary.csv")
+conc <- read_if("results/tables/spending_concentration.csv")
+histv <- read_if("results/tables/value_of_history.csv")
+repperf <- read_if("results/tables/replication_performance.csv")
+subcov <- read_if("results/tables/subgroup_cqr_coverage.csv")
+```
+
+# Abstract
+Healthcare expenditures are difficult to predict because the outcome combines a mass at zero with a highly right-skewed continuous distribution. This project uses the two-year longitudinal structure of the Medical Expenditure Panel Survey (MEPS) to predict Year-2 person-level expenditure from information observed in Year 1. The analysis compares classical health-expenditure models with flexible machine-learning models, evaluates performance using longitudinal survey weights, and extends point prediction to 90% prediction intervals using conformal prediction. A central goal is to determine not only which models predict spending accurately, but also whether their uncertainty intervals achieve reliable coverage across demographic, socioeconomic, insurance, and chronic-condition groups.
+
+# 1. Introduction
+MEPS is a nationally representative survey of the U.S. civilian noninstitutionalized population and provides detailed person-level information on demographics, health status, insurance, healthcare utilization, and expenditures. Predicting future expenditure is important for risk adjustment, budgeting, and identifying individuals who may require intensive case management. However, healthcare cost data violate many assumptions of ordinary regression: many individuals have no spending, the positive distribution is strongly right-skewed, and a small share of individuals account for a large share of total expenditure.
+
+This project addresses five questions. **RQ1:** Which classical or machine-learning model best predicts next-year expenditure and identifies the next-year top 5% of spenders under survey-weighted evaluation? **RQ2:** How wide must a 90% conformal prediction interval be, and does the interval remain valid in the upper tail? **RQ3:** Is interval coverage similar across age, race/ethnicity, insurance, income, and chronic-condition groups, and what width is required when coverage is calibrated within groups? **RQ4:** How much does prior-year spending and utilization improve prediction and reduce uncertainty? **RQ5** is optional and concerns conformal risk control for high-cost classification.
+
+# 2. Data
+## 2.1 MEPS longitudinal files
+The primary analysis uses the MEPS Panel 23 two-year longitudinal public-use file (HC-217), covering 2018-2019. The replication analysis uses Panel 24 (HC-225), covering 2019-2020. The longitudinal files contain harmonized Year-1 and Year-2 variables and the longitudinal weight `LONGWT`, variance stratum `VARSTR`, and primary sampling unit `VARPSU`.
+
+## 2.2 Analytic sample
+The analytic cohort is restricted to persons observed across all five standard rounds (`ALL5RDS = 1`) with positive longitudinal weight and valid nonnegative Year-1 and Year-2 expenditure. MEPS negative values represent categories such as inapplicable, not ascertained, refused, or don't know and are therefore set to missing before analysis. For transparency, a missingness table is generated before complete-case modeling. The final modeling sample retains observations with complete values for the pre-specified predictors.
+
+## 2.3 Outcome
+The outcome is Year-2 total healthcare expenditure (`TOTEXPY2`). Year-1 total expenditure (`TOTEXPY1`) is treated as a predictor. The top-5% high-cost indicator is defined using the survey-weighted 95th percentile of Year-2 spending in the training set to avoid leakage from the test set.
+
+## 2.4 Predictors
+Predictors are selected to reflect the syllabus domains rather than to maximize a black-box feature search: age, sex, race/ethnicity, Census region, poverty category, insurance coverage, total income, self-rated physical and mental health, chronic-condition count, office-based visits, emergency-room use, inpatient discharges, prescription count, and prior-year total expenditure. These variables represent demographics, socioeconomic status, insurance, health status, chronic disease burden, prior utilization, and prior cost.
+
+# 3. Statistical Methods
+## 3.1 Survey design and descriptive analysis
+Descriptive estimates use `survey::svydesign` with `LONGWT`, `VARSTR`, and `VARPSU`. The analysis reports weighted mean and quantiles of expenditure, the fraction with zero spending, spending concentration in the top 1%, 5%, and 10%, and persistence of high-cost status from Year 1 to Year 2. These summaries characterize the zero mass and long right tail before modeling.
+
+```{r desc-table}
+if(nrow(desc)) kable(desc, digits=3, caption="Survey-weighted descriptive statistics")
+```
+
+```{r concentration}
+if(nrow(conc)) kable(conc, digits=3, caption="Concentration of Year-2 healthcare spending")
+```
+
+# 4. Predictive Models
+The data are divided into independent training (60%), calibration (20%), and test (20%) sets. The training sample is used to estimate model parameters. The calibration sample is reserved for conformal interval construction. The test sample is used only for final performance evaluation.
+
+## 4.1 Two-part model
+The first component estimates the probability of any positive Year-2 expenditure with logistic regression. Among people with positive expenditure, a Gamma generalized linear model with log link estimates expected positive spending. The unconditional expected expenditure is the product of these two predictions.
+
+## 4.2 Tweedie GLM
+A Tweedie GLM with variance power 1.5 and log link is included because it can represent a distribution with both a point mass at zero and positive continuous right-skewed outcomes.
+
+## 4.3 Log-OLS with Duan smearing
+Ordinary least squares is fit to `log(1 + expenditure)`. Predictions are transformed back to dollars using a weighted Duan smearing factor, which corrects retransformation bias caused by exponentiating a fitted log outcome.
+
+## 4.4 Quantile regression
+Weighted quantile regression estimates the conditional median for point prediction and the 5th and 95th conditional quantiles for conformalized quantile regression.
+
+## 4.5 Gradient boosting
+XGBoost is fit both to raw expenditure and `log(1 + expenditure)`. Categorical variables are one-hot encoded. Survey weights enter the model loss. Feature importance is summarized using XGBoost gain.
+
+# 5. Point-Prediction Evaluation (RQ1)
+Models are evaluated on the untouched test set using survey-weighted RMSE, MAE, and R-squared. High-cost identification is evaluated with weighted AUC and positive predictive value when only the top 5% of the weighted population can be selected for intervention.
+
+```{r model-perf}
+if(nrow(perf)) kable(perf, digits=3, caption="Survey-weighted test-set predictive performance")
+```
+
+```{r calfig, out.width='100%'}
+if(file.exists("results/figures/model_calibration.png")) knitr::include_graphics("results/figures/model_calibration.png")
+```
+
+```{r impfig, out.width='80%'}
+if(file.exists("results/figures/xgboost_feature_importance.png")) knitr::include_graphics("results/figures/xgboost_feature_importance.png")
+```
+
+# 6. Prediction Intervals and Uncertainty (RQ2)
+Three distribution-free approaches are evaluated. First, split conformal prediction uses the absolute residual on the calibration sample and adds the weighted 90th percentile of that score around the point prediction. Second, scaled-residual conformal divides residuals by the square root of predicted expenditure plus one, allowing intervals to widen with expected spending. Third, conformalized quantile regression starts from the estimated 5th and 95th conditional quantiles and expands them using a calibration score. A model-based two-part Gamma simulation interval provides a parametric comparison.
+
+```{r intervals}
+if(nrow(ints)) kable(ints, digits=3, caption="Prediction-interval performance")
+```
+
+The main criteria are marginal coverage, lower-tail miscoverage, upper-tail miscoverage, and mean interval width. A useful interval should approach the nominal 90% coverage while remaining as narrow as possible.
+
+# 7. Coverage Across Groups (RQ3)
+CQR coverage is audited across age group, race/ethnicity, insurance category, poverty category, and chronic-condition count. This distinguishes overall marginal validity from subgroup reliability.
+
+```{r subgroup}
+if(nrow(subcov)) kable(subcov, digits=3, caption="CQR coverage by subgroup")
+```
+
+```{r subgroupfig, out.width='100%'}
+if(file.exists("results/figures/subgroup_coverage.png")) knitr::include_graphics("results/figures/subgroup_coverage.png")
+```
+
+Group-conditional (Mondrian) conformal prediction recalibrates the residual threshold within each age group. The analysis reports whether this moves each group's coverage toward 90% and how much additional interval width is required.
+
+# 8. Value of Prior-Year History (RQ4)
+The value-of-history analysis compares a model using demographics, socioeconomic variables, insurance, health status, and chronic burden with a model that additionally includes Year-1 utilization and expenditure. Both models are wrapped with the same 90% split-conformal procedure. A reduction in mean interval width indicates that prior utilization and spending make individual future expenditure more predictable.
+
+```{r hist}
+if(nrow(histv)) kable(histv, digits=3, caption="Value of prior-year spending and utilization")
+```
+
+# 9. Replication and Robustness
+The primary longitudinal specification is transported to MEPS Panel 24 (2019-2020). This provides a direct test of whether the main prediction structure persists in a different panel and time period.
+
+```{r replication}
+if(nrow(repperf)) kable(repperf, digits=3, caption="Panel 24 replication performance")
+```
+
+Additional robustness checks should compare survey-weighted versus unweighted conformal calibration and, if desired, refit the full set of models in Panel 24 rather than only transport the primary specification.
+
+# 10. Discussion
+The discussion should interpret model differences in the context of the unusual healthcare-expenditure distribution. A lower RMSE does not by itself imply reliable person-level uncertainty. Conversely, a conformal procedure can achieve marginal coverage while some demographic groups still under-cover. Therefore, the main contribution of the analysis is the joint evaluation of point accuracy, high-cost identification, interval validity, interval width, and subgroup reliability.
+
+The feature-importance analysis should be interpreted as predictive rather than causal. A variable can be useful for forecasting future expenditure without having a causal effect on expenditure. Similarly, subgroup coverage differences indicate uneven predictive uncertainty, not necessarily discrimination by a healthcare system.
+
+# 11. Limitations
+Important limitations include reliance on public-use variables, possible measurement error in self-reported health and utilization, changes in healthcare use around 2020, complete-case handling of missing predictors, and the fact that survey-weighted predictive modeling does not convert the analysis into a causal study. Group-conditional conformal intervals may also become unstable in small calibration subgroups; the code therefore falls back to the global calibration threshold when a group has fewer than 40 calibration observations.
+
+# 12. Conclusion
+This project provides a reproducible framework for next-year healthcare expenditure prediction using MEPS. It combines models suited to zero-inflated and heavy-tailed spending with survey-weighted evaluation and conformal uncertainty quantification. The final conclusions should identify which model gives the strongest point prediction, how costly valid 90% uncertainty is in interval width, where subgroup under-coverage occurs, and how much prior-year history improves predictability.
+
+# Reproducibility Appendix
+All analysis is executed from `run_all.R`. Raw public-use MEPS data are downloaded directly from AHRQ. Package installation is handled by `00_setup.R`. Intermediate cleaned data are saved under `data_processed/`; tables and figures are saved under `results/`. The project uses a fixed random seed of 7980. AI assistance, if used for coding or editing, should be disclosed here in accordance with the STAT 7980 syllabus.
+
+# References
+- Agency for Healthcare Research and Quality. Medical Expenditure Panel Survey (MEPS) public-use data and documentation.
+- Deb, P., & Norton, E. C. (2018). Modeling health care expenditures and use. *Annual Review of Public Health*, 39, 489-505.
+- Manning, W. G., & Mullahy, J. (2001). Estimating log models: to transform or not to transform? *Journal of Health Economics*, 20(4), 461-494.
+- Buntin, M. B., & Zaslavsky, A. M. (2004). Too much ado about two-part models and transformation? *Journal of Health Economics*, 23(3), 525-542.
+- Angelopoulos, A. N., & Bates, S. (2023). Conformal prediction: a gentle introduction. *Foundations and Trends in Machine Learning*, 16(4), 494-591.
+- Romano, Y., Patterson, E., & Candès, E. (2019). Conformalized quantile regression. *NeurIPS 32*.

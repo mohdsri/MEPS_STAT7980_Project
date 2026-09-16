@@ -1,0 +1,9 @@
+.DS_Store
+.Rhistory
+.RData
+.Rproj.user/
+
+data_raw/
+data_processed/
+
+*.zip
