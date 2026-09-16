@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # STAT 7980 MEPS Capstone Project
 
 **Title:** Statistical Analysis of Healthcare Expenditures Using MEPS: Calibrated Uncertainty for Individual-Level Cost Prediction
@@ -840,4 +839,3 @@ open results
 # MEPS_STAT7980_Project
 =======
 # MEPS_STAT7980_Project
->>>>>>> 6a93612d537e6b5566099e57f348d6b87ef92cdd
